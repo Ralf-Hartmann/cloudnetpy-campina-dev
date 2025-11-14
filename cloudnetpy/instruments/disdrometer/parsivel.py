@@ -141,33 +141,6 @@ def parsivel2nc(
         disdrometer_file = [temp_file_path]
 
         
-
-        # if not isinstance(disdrometer_file, str | PathLike):
-        #     if len(disdrometer_file) > 1:
-        #         msg = "Only single file supported with file_contains_date_range=True"
-        #         raise DisdrometerDataError(msg)
-        #     disdrometer_file = disdrometer_file[0]
-        
-        # # Convert date to YYYYMMDD format
-        # target_date = date.strftime("%Y%m%d")
-        
-        # # Extract segments for the target date
-        # segments = extract_date_segments(str(disdrometer_file), target_date)
-        
-        # if not segments:
-        #     msg = f"No data found for date {target_date} in file {disdrometer_file}"
-        #     raise DisdrometerDataError(msg)
-        
-        # # Create temporary file with extracted data
-        # output_path = Path(output_file)
-        # temp_file = output_path.parent / f"{target_date}_parsivel_temp.txt"
-        
-        # with open(temp_file, 'w') as f:
-        #     f.write('\n'.join(segments))
-        
-        # # Use the temporary file for processing
-        # disdrometer_file = [temp_file]
-        # logging.info(f"Extracted {len(segments)} segments for date {target_date}")
     
     elif isinstance(disdrometer_file, str | PathLike):
         disdrometer_file = [disdrometer_file]
