@@ -2,12 +2,14 @@ import csv
 import datetime
 import logging
 import re
+import os
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from itertools import islice
 from os import PathLike
 from typing import Any
 from uuid import UUID
+from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
@@ -23,6 +25,67 @@ from cloudnetpy.utils import get_uuid
 from .common import ATTRIBUTES, Disdrometer
 
 
+# def parsivel2nc(
+#     disdrometer_file: str | PathLike | Iterable[str | PathLike],
+#     output_file: str | PathLike,
+#     site_meta: dict,
+#     uuid: str | UUID | None = None,
+#     date: str | datetime.date | None = None,
+#     telegram: Sequence[int | None] | None = None,
+#     timestamps: Sequence[datetime.datetime] | None = None,
+# ) -> UUID:
+#     """Converts OTT Parsivel-2 disdrometer data into Cloudnet Level 1b netCDF
+#     file.
+
+#     Args:
+#         disdrometer_file: Filename of disdrometer file or list of filenames.
+#         output_file: Output filename.
+#         site_meta: Dictionary containing information about the site. Required key
+#             is `name`.
+#         uuid: Set specific UUID for the file.
+#         date: Expected date of the measurements as YYYY-MM-DD.
+#         telegram: List of measured value numbers as specified in section 11.2 of
+#             the instrument's operating instructions. Unknown values are indicated
+#             with None. Telegram is required if the input file doesn't contain a
+#             header.
+#         timestamps: Specify list of timestamps if they are missing in the input file.
+
+#     Returns:
+#         UUID of the generated file.
+
+#     Raises:
+#         DisdrometerDataError: Timestamps do not match the expected date, or unable
+#             to read the disdrometer file.
+
+#     Examples:
+#         >>> from cloudnetpy.instruments import parsivel2nc
+#         >>> site_meta = {'name': 'Lindenberg', 'altitude': 104, 'latitude': 52.2,
+#         'longitude': 14.1}
+#         >>> uuid = parsivel2nc('parsivel.log', 'parsivel.nc', site_meta)
+
+#     """
+#     if isinstance(date, str):
+#         date = datetime.date.fromisoformat(date)
+#     uuid = get_uuid(uuid)
+#     if isinstance(disdrometer_file, str | PathLike):
+#         disdrometer_file = [disdrometer_file]
+#     disdrometer = Parsivel(disdrometer_file, site_meta, telegram, date, timestamps)
+#     disdrometer.sort_timestamps()
+#     disdrometer.remove_duplicate_timestamps()
+#     disdrometer.mask_invalid_values()
+#     if len(disdrometer.data["time"].data) < 2:
+#         msg = "Too few data points"
+#         raise DisdrometerDataError(msg)
+#     disdrometer.convert_units()
+#     disdrometer.add_meta()
+#     attributes = output.add_time_attribute(ATTRIBUTES, disdrometer.date)
+#     output.update_attributes(disdrometer.data, attributes)
+#     output.save_level1b(disdrometer, output_file, uuid)
+#     return uuid
+
+
+
+
 def parsivel2nc(
     disdrometer_file: str | PathLike | Iterable[str | PathLike],
     output_file: str | PathLike,
@@ -31,10 +94,10 @@ def parsivel2nc(
     date: str | datetime.date | None = None,
     telegram: Sequence[int | None] | None = None,
     timestamps: Sequence[datetime.datetime] | None = None,
+    file_contains_date_range: bool | None = False
 ) -> UUID:
     """Converts OTT Parsivel-2 disdrometer data into Cloudnet Level 1b netCDF
     file.
-
     Args:
         disdrometer_file: Filename of disdrometer file or list of filenames.
         output_file: Output filename.
@@ -47,40 +110,88 @@ def parsivel2nc(
             with None. Telegram is required if the input file doesn't contain a
             header.
         timestamps: Specify list of timestamps if they are missing in the input file.
-
+        file_contains_date_range: If True, extract data for the specified date from
+            a multi-date file before processing.
     Returns:
         UUID of the generated file.
-
     Raises:
         DisdrometerDataError: Timestamps do not match the expected date, or unable
             to read the disdrometer file.
-
     Examples:
         >>> from cloudnetpy.instruments import parsivel2nc
         >>> site_meta = {'name': 'Lindenberg', 'altitude': 104, 'latitude': 52.2,
-        'longitude': 14.1}
+                'longitude': 14.1}
         >>> uuid = parsivel2nc('parsivel.log', 'parsivel.nc', site_meta)
-
     """
     if isinstance(date, str):
         date = datetime.date.fromisoformat(date)
+    
     uuid = get_uuid(uuid)
-    if isinstance(disdrometer_file, str | PathLike):
+    
+    # Handle multi-date file extraction
+    if file_contains_date_range:
+        if date is None:
+            msg = "Date must be specified when file_contains_date_range is True"
+            raise DisdrometerDataError(msg)
+        
+        logging.info("File contains date range, extracting data for specified date.")
+        
+        # Convert to single file if it's a list
+        temp_file_path = handle_date_range(date, disdrometer_file, output_file)
+        disdrometer_file = [temp_file_path]
+
+        
+
+        # if not isinstance(disdrometer_file, str | PathLike):
+        #     if len(disdrometer_file) > 1:
+        #         msg = "Only single file supported with file_contains_date_range=True"
+        #         raise DisdrometerDataError(msg)
+        #     disdrometer_file = disdrometer_file[0]
+        
+        # # Convert date to YYYYMMDD format
+        # target_date = date.strftime("%Y%m%d")
+        
+        # # Extract segments for the target date
+        # segments = extract_date_segments(str(disdrometer_file), target_date)
+        
+        # if not segments:
+        #     msg = f"No data found for date {target_date} in file {disdrometer_file}"
+        #     raise DisdrometerDataError(msg)
+        
+        # # Create temporary file with extracted data
+        # output_path = Path(output_file)
+        # temp_file = output_path.parent / f"{target_date}_parsivel_temp.txt"
+        
+        # with open(temp_file, 'w') as f:
+        #     f.write('\n'.join(segments))
+        
+        # # Use the temporary file for processing
+        # disdrometer_file = [temp_file]
+        # logging.info(f"Extracted {len(segments)} segments for date {target_date}")
+    
+    elif isinstance(disdrometer_file, str | PathLike):
         disdrometer_file = [disdrometer_file]
+    
     disdrometer = Parsivel(disdrometer_file, site_meta, telegram, date, timestamps)
     disdrometer.sort_timestamps()
     disdrometer.remove_duplicate_timestamps()
     disdrometer.mask_invalid_values()
+    
     if len(disdrometer.data["time"].data) < 2:
         msg = "Too few data points"
         raise DisdrometerDataError(msg)
+    
     disdrometer.convert_units()
     disdrometer.add_meta()
     attributes = output.add_time_attribute(ATTRIBUTES, disdrometer.date)
     output.update_attributes(disdrometer.data, attributes)
     output.save_level1b(disdrometer, output_file, uuid)
+    
+    # Clean up temporary file if it was created
+    if temp_file_path is not None:
+        temp_file_path.unlink()
+    
     return uuid
-
 
 class Parsivel(Disdrometer):
     def __init__(
@@ -717,3 +828,139 @@ def _read_parsivel(
         result[key] = ma.array(array, mask=mask)
     result["time"] = result["_datetime"].astype("datetime64[s]")
     return result
+
+#####################################################
+# Implement the cleaning and splitting routine here? #
+######################################################
+
+def find_files_by_date(target_date, input_dir):
+    """
+    Find files whose date range contains the given date YYYYMMDD.
+    Works for .txt files.
+    """
+    target_date = datetime.strptime(target_date, "%Y%m%d").date()
+
+    # match paths
+    file_paths = glob.glob(os.path.join(input_dir, "*.txt"))
+
+    date_pattern = re.compile(r"(\d{8})_(\d{8})")
+    matching_files = []
+
+    for file_path in file_paths:
+        file_name = os.path.basename(file_path)
+        m = date_pattern.search(file_name)
+        if not m:
+            continue
+
+        start_date = datetime.strptime(m.group(1), "%Y%m%d").date()
+        end_date   = datetime.strptime(m.group(2), "%Y%m%d").date()
+
+        # check if target_date lies in the interval [start_date, end_date]
+        if start_date <= target_date <= end_date:
+            matching_files.append(file_name)
+
+    return matching_files
+
+
+
+def clean_array_line(line: str) -> str:
+    """Clean array lines to remove trailing semicolons."""
+    # Match and clean only array lines starting with "90:", "91:", ..., "98:"
+    if re.match(r"^(9[0-8]):", line):
+        # Split the identifier (e.g., "90:") from the values
+        identifier, values = line.split(":", 1)
+        # Remove trailing semicolons from the values
+        values = re.sub(r";+$", "", values.strip())
+        return f"{identifier}:{values}"
+    return line
+
+
+
+def extract_date_segments(input_file, target_date):
+    """
+    Extract segments for a specific date from the input file.
+    Args:
+        input_file (str): Path to the Parsivel file.
+        target_date (str): Target date in YYYYMMDD format (e.g., "20231025").
+    Returns:
+        list: List of cleaned segment strings for the target date.
+    """
+    segment_lines = []
+    current_date = ""
+    result_segments = []
+    telegram = [1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 16, 17, 18,
+                20, 21, 24, 25, 26, 27, 28, 34, 35, 90, 91, 93]
+    
+    with open(input_file, 'r') as file:
+        for line in file:
+            line = line.strip()
+            # Clean array lines 
+            line = clean_array_line(line)
+            
+            # Check for line format like 21: for date
+            if re.match(r"^21:", line):
+                raw_date = line.split(':')[1]
+                current_date = raw_date.replace('.', '') if raw_date else ""
+                if len(current_date) == 8:  # Ensure format like DDMMYYYY
+                    current_date = f"{current_date[4:8]}{current_date[2:4]}{current_date[0:2]}"  # Convert to YYYYMMDD
+            
+            # Only process lines for the target date
+            if current_date != target_date:
+                continue
+            
+            # Add only the lines with valid telegram numbers
+            match = re.match(r"^(\d+):", line)
+            if match:
+                number = int(match.group(1))
+                if number in telegram:
+                    # Remove numbers before ":" and clean up the rest of the line
+                    cleaned_line = line.split(":", 1)[1]
+                    segment_lines.append(cleaned_line)
+            
+            # If line is 98:, assume the end of the current segment
+            if re.match(r"^98:", line):
+                cleaned_segment = ';'.join(segment_lines)
+                result_segments.append(cleaned_segment)
+                segment_lines = []  # Reset for the next segment
+    
+    # Remove the first line if it exists (it's broken)
+    if result_segments:
+        result_segments = result_segments[1:]
+    
+    # with open(f"parsivel_extracted_{target_date}.txt", "w") as f:
+    #     f.write("\n".join(result_segments) )
+    
+    return result_segments
+
+
+def handle_date_range(date, disdrometer_file, output_file):
+
+    # Convert to single file if it's a list
+    if not isinstance(disdrometer_file, str | PathLike):
+        if len(disdrometer_file) > 1:
+            msg = "Only single file supported with file_contains_date_range=True"
+            raise DisdrometerDataError(msg)
+        disdrometer_file = disdrometer_file[0]
+
+    # Convert date to YYYYMMDD format
+    target_date = date.strftime("%Y%m%d")
+
+    # Extract segments for the target date
+    segments = extract_date_segments(str(disdrometer_file), target_date)
+
+    if not segments:
+        msg = f"No data found for date {target_date} in file {disdrometer_file}"
+        raise DisdrometerDataError(msg)
+
+    # Create temporary file with extracted data
+    output_path = Path(output_file)
+    temp_file = output_path.parent / f"{target_date}_parsivel_temp.txt"
+
+    with open(temp_file, 'w') as f:
+        f.write('\n'.join(segments))
+
+    # Use the temporary file for processing
+    # disdrometer_file = [temp_file]
+    logging.info(f"Extracted {len(segments)} segments for date {target_date}")
+
+    return temp_file
